@@ -27,7 +27,7 @@ const options = {
 // const searchUrl = 'file:///Users/Rossonero/Desktop/jy.htm';
 const searchUrl = 'https://shop.10086.cn/i/?f=billdetailqry';
 
-let page, queryData, monthData = [], allData = {}, totalNum, loginNumber;
+let page, queryData, monthData = [], allData = {}, totalNum, loginNumber, trace = {sms:'0',call:'0'};
 
 const cmCrawler = async function () {
     await init();
@@ -51,6 +51,17 @@ const cmCrawler = async function () {
     // await page.waitForSelector('#show_vec_firstdiv');
     const loginNumberEl = (await page.waitForSelector('.loginStr', {timeout: 0}));
     loginNumber = await page.evaluate(el => el.innerText, loginNumberEl);
+    if(!fs.existsSync(loginNumber)){
+        fs.mkdirSync(loginNumber);
+    }
+    if(!fs.existsSync(`${loginNumber}/trace.txt`)){
+        let fd = fs.openSync(`${loginNumber}/trace.txt`, 'w');
+        fs.writeFileSync(fd, JSON.stringify(trace));
+    }else{
+        let fd = fs.openSync(`${loginNumber}/trace.txt`, 'r');
+        let content = fs.readFileSync(fd, 'utf8');
+        trace = JSON.parse(content);
+    }
     await page.waitFor(1000);
     console.log(loginNumber);
     const queryTypeList = [];
@@ -72,7 +83,7 @@ const cmCrawler = async function () {
         const date = new Date();
         const [y, m, d] = [date.getFullYear(), date.getMonth() + 1, date.getDate()];
 
-        const filename = `${loginNumber}_${type}_${y}${m}${d}.csv`;
+        const filename = `${loginNumber}/${type}_${y}${m}${d}.csv`;
         if(fs.existsSync(filename)){
             fs.unlinkSync(filename);
         }
@@ -82,6 +93,8 @@ const cmCrawler = async function () {
             totalNum = 0;
 
             const month = await page.evaluate(el => el.getAttribute('v'), monthLi);
+            if(month <= trace[type]) continue;
+            trace[type] = month;
             //todo remove activate
             await monthLi.click();
             console.log('1.0 init month :', type, month, monthData.length, totalNum);
@@ -107,7 +120,7 @@ const cmCrawler = async function () {
             // totalNum = /\d+/.exec(totalNum)[0];
 
             while (totalNum > monthData.length) {
-                console.log('2.1 in loop, month data length: ', monthData.length, + ' total: ' +totalNum);
+                console.log('2.1 in loop, month data length: ', monthData.length, ' total: ',totalNum);
                 console.log('wait for login diag to disappear');
                 await page.waitForSelector('#show_vec_firstdiv',{hidden: true, timeout: 0});
                 console.log('wait for login in');
@@ -149,7 +162,7 @@ const cmCrawler = async function () {
 };
 function writeData(filename, data, type){
 
-
+    fs.writeFileSync(`${loginNumber}/trace.txt`, JSON.stringify(trace));
     let fd = fs.openSync(filename, 'a+');
     fs.appendFileSync(fd, lineTitles[type]);
 
