@@ -53,6 +53,7 @@ const cmCrawler = async function () {
     loginNumber = await page.evaluate(el => el.innerText, loginNumberEl);
     if(!fs.existsSync(loginNumber)){
         fs.mkdirSync(loginNumber);
+        fs.mkdirSync(loginNumber + '/screenshots');
     }
     if(!fs.existsSync(`${loginNumber}/trace.txt`)){
         let fd = fs.openSync(`${loginNumber}/trace.txt`, 'w');
@@ -81,9 +82,9 @@ const cmCrawler = async function () {
         const type = query.recordType;
         //init file
         const date = new Date();
-        const [y, m, d] = [date.getFullYear(), date.getMonth() + 1, date.getDate()];
+        const [y, m, d, t] = [date.getFullYear(), date.getMonth() + 1, date.getDate(), date.getTime()];
 
-        const filename = `${loginNumber}/${type}_${y}${m}${d}.csv`;
+        const filename = `${loginNumber}/${type}_${y}.${m}.${d}_${t}.csv`;
         if(fs.existsSync(filename)){
             fs.unlinkSync(filename);
         }
@@ -93,8 +94,9 @@ const cmCrawler = async function () {
             totalNum = 0;
 
             const month = await page.evaluate(el => el.getAttribute('v'), monthLi);
-            if(month <= trace[type]) continue;
+            if(month < trace[type]) continue;
             trace[type] = month;
+            await page.screenshot({path: `${loginNumber}/screenshots/${type}_${month}.png`});
             //todo remove activate
             await monthLi.click();
             console.log('1.0 init month :', type, month, monthData.length, totalNum);
