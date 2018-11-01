@@ -1,7 +1,13 @@
 const puppeteer = require('puppeteer');
 const devices = require('puppeteer/DeviceDescriptors');
-
+const path = require('path');
 const fs = require('fs');
+const log4js = require('log4js');
+const logger = log4js.getLogger();
+logger.level = 'debug';
+const {config} = require('./config.js');
+log4js.configure(config.log4js);
+
 const billTypeMap = {
     '02': 'call',
     '03': 'sms'
@@ -26,14 +32,21 @@ const options = {
 };
 // const searchUrl = 'file:///Users/Rossonero/Desktop/jy.htm';
 const searchUrl = 'https://shop.10086.cn/i/?f=billdetailqry';
+const executablePath = {
+    win32: path.join(__dirname, '../node_modules/puppeteer/.local-chromium/win-594312/chrome-win/chrome'),
+    win64: path.join(__dirname, '../node_modules/puppeteer/.local-chromium/win64-594312/chrome-win/chrome'),
+    mac: path.join(__dirname, '../node_modules/puppeteer/.local-chromium/mac-594312/chrome-mac/Chromium.app/Contents/MacOS/Chromium')
+};
 
-let page, queryData, monthData = [], allData = {}, totalNum, loginNumber, trace = {sms:'0',call:'0'};
+let page, queryData, monthData = [], allData = {}, totalNum, loginNumber, type,
+    trace = {version: 1, sms: {date: '0', cursor: 1}, call: {date: '0', cursor: 1}};
 
 const cmCrawler = async function () {
     await init();
 
     // const l = await page.waitForSelector('#dropdownMenu2');
-    // console.log(await page.evaluate(el => el.innerText, l));
+    // logger.info(await page.evaluate(el => el.innerText, l));
+    logger.info('------------------------\n');
     const loginBtn = await page.waitForSelector('#login-btn');
     loginBtn.click();
     let detailRequest, jsonpFunction;
@@ -51,20 +64,12 @@ const cmCrawler = async function () {
     // await page.waitForSelector('#show_vec_firstdiv');
     const loginNumberEl = (await page.waitForSelector('.loginStr', {timeout: 0}));
     loginNumber = await page.evaluate(el => el.innerText, loginNumberEl);
-    if(!fs.existsSync(loginNumber)){
-        fs.mkdirSync(loginNumber);
-        fs.mkdirSync(loginNumber + '/screenshots');
-    }
-    if(!fs.existsSync(`${loginNumber}/trace.txt`)){
-        let fd = fs.openSync(`${loginNumber}/trace.txt`, 'w');
-        fs.writeFileSync(fd, JSON.stringify(trace));
-    }else{
-        let fd = fs.openSync(`${loginNumber}/trace.txt`, 'r');
-        let content = fs.readFileSync(fd, 'utf8');
-        trace = JSON.parse(content);
-    }
+    await page.evaluate(() => {
+        window.loginStatus = true
+    });
+    initTrace(loginNumber);
     await page.waitFor(1000);
-    console.log(loginNumber);
+    logger.info(loginNumber);
     const queryTypeList = [];
     queryTypeList.push(smsBtn);
     queryTypeList.push(callBtn);
@@ -79,13 +84,13 @@ const cmCrawler = async function () {
         await page.waitFor(1000);
         await query.click();
         // page.waitForSelector('#tmpl-data img');
-        const type = query.recordType;
+        type = query.recordType;
         //init file
         const date = new Date();
         const [y, m, d, t] = [date.getFullYear(), date.getMonth() + 1, date.getDate(), date.getTime()];
 
         const filename = `${loginNumber}/${type}_${y}.${m}.${d}_${t}.csv`;
-        if(fs.existsSync(filename)){
+        if (fs.existsSync(filename)) {
             fs.unlinkSync(filename);
         }
 
@@ -94,15 +99,15 @@ const cmCrawler = async function () {
             totalNum = 0;
 
             const month = await page.evaluate(el => el.getAttribute('v'), monthLi);
-            if(month < trace[type]) continue;
-            trace[type] = month;
-            await page.screenshot({path: `${loginNumber}/screenshots/${type}_${month}.png`});
+            // logger.info(month,trace[ty[]])
+            if (month < trace[type].date) continue;
+            trace[type].date = month;
             //todo remove activate
             await monthLi.click();
-            console.log('1.0 init month :', type, month, monthData.length, totalNum);
+            logger.info('1.0 init month :', type, month, monthData.length, totalNum);
             await page.waitForResponse((response => {
                 if (response.url().indexOf('detailbillinfojsonp') !== -1) {
-                    console.log('1.1 month waitfor response:', response.url());
+                    logger.info('1.1 month waitfor response:', response.url());
                     return true
                 }
             }), {timeout: 0}); // to do
@@ -113,33 +118,36 @@ const cmCrawler = async function () {
             // }catch(e){
             //     continue;
             // }
-            console.log('1.2 waiting for login');
+            logger.info('1.2 waiting for login');
             await page.waitForFunction(() => window.loginStatus === true, {timeout: 0});
+            await page.screenshot({path: `${loginNumber}/screenshots/${type}_${month}.png`, fullPage: true});
             // const notes2 = await page.waitForSelector('#notes2', {timeout: 0});
             // const pageInfo = await pageDiv.$evaluate('#notes1', el => el.innerText);
 
             // let totalNum = await page.evaluate(el => el.innerText, notes2);
             // totalNum = /\d+/.exec(totalNum)[0];
 
-            while (totalNum > monthData.length) {
-                console.log('2.1 in loop, month data length: ', monthData.length, ' total: ',totalNum);
-                console.log('wait for login diag to disappear');
-                await page.waitForSelector('#show_vec_firstdiv',{hidden: true, timeout: 0});
-                console.log('wait for login in');
+            while (totalNum > trace[type].cursor) {
+                logger.info('2.1 in loop, month data length: ', monthData.length, ' total: ', totalNum);
+                logger.info('wait for login diag to disappear');
+                await page.waitForSelector('#show_vec_firstdiv', {hidden: true, timeout: 0});
+                logger.info('wait for login in');
                 await page.waitForFunction(() => window.loginStatus === true, {timeout: 0});
                 const nextPage = Math.floor(monthData.length / 50) + 1;
-                console.log('nextpage ', nextPage);
+                logger.info('nextpage ', nextPage);
                 const input = await pageDiv.$('input');
-                await page.evaluate((el) => {el.value = ''}, input);
+                await page.evaluate((el) => {
+                    el.value = ''
+                }, input);
                 await input.type(String(nextPage));
                 const search = await pageDiv.$('.gs-search');
                 await page.evaluate(() => document.querySelector('#div_easy_entry') && document.querySelector('#div_easy_entry').remove());
                 await search.click();
-                console.log(`2.2 wait for ${nextPage} page response`);
+                logger.info(`2.2 wait for ${nextPage} page response`);
 
                 await page.waitForResponse((response => {
                     if (response.url().indexOf('detailbillinfojsonp') !== -1) {
-                        console.log('2.3 page waitfor response:', response.url());
+                        logger.info('2.3 page waitfor response:', response.url());
                         return true
                     }
                 }), {timeout: 0}); // to do
@@ -148,12 +156,11 @@ const cmCrawler = async function () {
                 // let text = await res.text();
                 // let results = JSON.parse(text.substring(text.indexOf('(') + 1, text.lastIndexOf(')')));
             }
-
+            logger.info('3.1 ' + month);
+            logger.info(monthData.length);
             queryData = queryData.concat(monthData);
             writeData(filename, monthData, type);
-            console.log('queryDdata:', queryData.length, queryData[0]);
-
-
+            logger.info('queryDdata:', queryData.length);
 
 
         }
@@ -162,9 +169,10 @@ const cmCrawler = async function () {
         allData[query.recordType] = queryData;
     }
 };
-function writeData(filename, data, type){
 
-    fs.writeFileSync(`${loginNumber}/trace.txt`, JSON.stringify(trace));
+function writeData(filename, data, type) {
+
+
     let fd = fs.openSync(filename, 'a+');
     fs.appendFileSync(fd, lineTitles[type]);
 
@@ -178,8 +186,10 @@ function writeData(filename, data, type){
     }
     fs.closeSync(fd);
 }
+
 const init = async () => {
     const browser = await puppeteer.launch({
+        executablePath: executablePath.mac,
         headless: false, ignoreHTTPSErrors: true,
         // slowMo: 100,
         args: [
@@ -203,6 +213,23 @@ const init = async () => {
     })
 
 };
+
+function initTrace(path) {
+    if (!fs.existsSync(path)) {
+        fs.mkdirSync(path);
+        fs.mkdirSync(path + '/screenshots');
+    }
+    if (!fs.existsSync(`${path}/trace.txt`)) {
+        let fd = fs.openSync(`${path}/trace.txt`, 'w');
+        fs.writeFileSync(fd, JSON.stringify(trace) + ';');
+    } else {
+        let fd = fs.openSync(`${path}/trace.txt`, 'r');
+        let content = fs.readFileSync(fd, 'utf8');
+        content = content.substring(0, content.indexOf(';'));
+        trace = JSON.parse(content);
+    }
+}
+
 const requestInterceptor = interceptedRequest => {
     let url = interceptedRequest.url();
     let queryMap = {};
@@ -217,9 +244,9 @@ const requestInterceptor = interceptedRequest => {
         });
         const billType = billTypeMap[queryMap['billType']];
 
-        url = url.replace(/step=\d+/, 'step=200').replace(/curCuror=\d+/, `curCuror=${monthData.length + 1}`)
+        url = url.replace(/step=\d+/, 'step=200').replace(/curCuror=\d+/, `curCuror=${trace[type].cursor}`);
         // detailRequest = interceptedRequest.url();
-        console.log('request url:', url);
+        logger.info('request url:', url);
     }
     interceptedRequest.continue({url});
 
@@ -228,77 +255,41 @@ const requestInterceptor = interceptedRequest => {
 const responseParser = async response => {
     const url = response.url();
     if (url.indexOf('detailbillinfojsonp') === -1) return;
-    // console.log('response url: ', url);
+    // logger.info('response url: ', url);
+    logger.info('response url:', url);
     const text = await response.text();
+
     const results = JSON.parse(text.substring(text.indexOf('(') + 1, text.lastIndexOf(')')));
-    // console.log(results);
-    console.log('response url:', url);
-    console.log('in response total num', results.totalNum);
+    // logger.info(results);
+    logger.info('in response total num', results.totalNum);
     if (results.retCode === '520001') {
-        console.log('520001 results', JSON.stringify(results));
+        logger.info('520001 results', JSON.stringify(results));
         await page.evaluate(() => {
             loginStatus = false
         });
     }
-    if (results.retCode === '000000' && results.curCuror > monthData.length) {
-        totalNum = results.totalNum;
-        monthData = monthData.concat(results.data);
-        console.log(`in response, ${results.startDate}\n result cursor: ${results.curCuror}\nresults length: ${results.data.length}\ntotalNum: ${totalNum}`);
+    if ((results.retCode === '000000' || results.retCode === '400010')) {
+        // if (!results.totalNum) results.totalNum = results.data ? results.data.length : 0;
+        // if (!results.curCuror) results.curCuror = trace[type].cursor;
+        totalNum = results.totalNum || totalNum;
+        if (results.data) {
+            monthData = monthData.concat(results.data);
+            trace[type].cursor = trace[type].cursor + results.data.length;
+        }
+
+        if(trace[type].cursor >= totalNum){
+            trace[type].cursor = 1;
+            totalNum = 0;
+        }
+        logger.info('in response trace:', JSON.stringify(trace));
+        fs.writeFileSync(`${loginNumber}/trace.txt`, JSON.stringify(trace) + ';');
+        logger.info(`in response, ${results.startDate}\n result cursor: ${results.curCuror}\nresults length: ${results.data ? results.data.length : 0}\ntotalNum: ${totalNum}`);
         await page.evaluate(() => {
             loginStatus = true
         });
+        delete results.data;
+        logger.info('response result:', results);
     }
 };
 
 cmCrawler();
-// await page.evaluate(() => {
-//     document.querySelector('#login-btn').click();
-// });
-// await page.screenshot({path: 'example.png'});
-//短信 document.querySelector('[eventcode=UCenter_billdetailqry_type_DCXD]')
-//通话 document.querySelector('[eventcode=UCenter_billdetailqry_type_THXD]')
-//身份认证 #show_vec_firstdiv
-//     await page.evaluate(() => {
-//         const span = document.createElement('span');
-//         const txt = document.createTextNode('text');
-//         span.appendChild(txt);
-//         const div = document.querySelector('#middleLeft');
-//         div.insertBefore(span, null);
-//
-//
-//     })
-
-//page.on('console', msg => console.log('PAGE LOG:', msg.text()));
-// await browser.close();
-
-
-//https://shop.10086.cn/i/v1/fee/detailbillinfojsonp/15889636305?callback=jQuery004414273435542815_1540360370438&curCuror=151&step=100&qryMonth=201809&billType=02&_=1540360495281
-// await page.setRequestInterception(true);
-// page.on('console', msg => console.log('PAGE LOG:', msg.text()));
-// page.on('request', interceptedRequest => {
-//     if (interceptedRequest.url().endsWith('.png') || interceptedRequest.url().endsWith('.jpg'))
-//         interceptedRequest.abort();
-//     else
-//         interceptedRequest.continue();
-// });
-
-
-// # Basic verbose logging
-// env DEBUG="puppeteer:*" node script.js
-//
-// # Debug output can be enabled/disabled by namespace
-// env DEBUG="puppeteer:*,-puppeteer:protocol" node script.js # everything BUT protocol messages
-// env DEBUG="puppeteer:session" node script.js # protocol session messages (protocol messages to targets)
-// env DEBUG="puppeteer:mouse,puppeteer:keyboard" node script.js # only Mouse and Keyboard API calls
-//
-// # Protocol traffic can be rather noisy. This example filters out all Network domain messages
-// env DEBUG="puppeteer:*" env DEBUG_COLORS=true node script.js 2>&1 | grep -v '"Network'
-
-// request.continue([overrides])
-// overrides <Object> Optional request overwrites, which can be one of the following:
-//     url <string> If set, the request url will be changed
-// method <string> If set changes the request method (e.g. GET or POST)
-// postData <string> If set changes the post data of request
-// headers <Object> If set changes the request HTTP headers
-// returns: <Promise>
-// Continues request with optional request overrides. To use this, request interception should be enabled with page.setRequestInterception. Exception is immediately thrown if the request interception is not enabled.
