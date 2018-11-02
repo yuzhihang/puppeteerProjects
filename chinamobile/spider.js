@@ -1,6 +1,5 @@
-const puppeteer = require('puppeteer');
+﻿const puppeteer = require('puppeteer');
 const devices = require('puppeteer/DeviceDescriptors');
-const path = require('path');
 const fs = require('fs');
 const log4js = require('log4js');
 const logger = log4js.getLogger();
@@ -11,14 +10,19 @@ const billTypeMap = {
     '02': 'call',
     '03': 'sms'
 };
+const chineseFilePrefix = {
+    'call': '通话记录',
+    'sms': '短信记录'
+};
 
 const lineTitles = {
-    'sms': '起始时间,通信地点,对方号码,通信方式,信息类型\n',
-    'call': '起始时间,通信地点,对方号码,通信方式,通信类型,通信时长\n'
+    'sms': '起始时间,通信地点,对方号码,通信方式,信息类型,业务名称,套餐优惠,通信费(元)\n',
+    'call': '起始时间,通信地点,通信方式,对方号码,通信时长,通信类型,套餐优惠,实收通信费(元)\n'
 };
+
 const lineFields = {
-    'sms': ['startTime', 'commPlac', 'anotherNm', 'commMode', 'infoType'],
-    'call': ['startTime', 'commPlac', 'anotherNm', 'commMode', 'commType', 'commTime']
+    'sms': ['startTime', 'commPlac', 'anotherNm', 'commMode', 'infoType','busiName','meal','commFee'],
+    'call': ['startTime', 'commPlac', 'commMode', 'anotherNm',  'commTime','commType','mealFavorable','commFee']
 };
 
 // let queriedData = {
@@ -31,11 +35,6 @@ const options = {
 };
 // const searchUrl = 'file:///Users/Rossonero/Desktop/jy.htm';
 const searchUrl = 'https://shop.10086.cn/i/?f=billdetailqry';
-const executablePath = {
-    win32: path.join(__dirname, '../node_modules/puppeteer/.local-chromium/win-594312/chrome-win/chrome'),
-    win64: path.join(__dirname, '../node_modules/puppeteer/.local-chromium/win64-594312/chrome-win/chrome'),
-    mac: path.join(__dirname, '../node_modules/puppeteer/.local-chromium/mac-594312/chrome-mac/Chromium.app/Contents/MacOS/Chromium')
-};
 
 let page, queryData, monthData = [], allData = {}, totalNum, loginNumber, type,
     trace = {version: 1, sms: {date: '0', cursor: 1}, call: {date: '0', cursor: 1}};
@@ -52,10 +51,20 @@ const cmCrawler = async function () {
     await page.waitForSelector('table.ui-dialog-grid', {hidden: true, timeout: 0});
     await page.waitForSelector('#switch-data');// 类型菜单栏
 
-    const smsBtn = await page.$('[eventcode=UCenter_billdetailqry_type_DCXD]');
+    //先采集电话
+    
     const callBtn = await page.$('[eventcode=UCenter_billdetailqry_type_THXD]');
-    smsBtn.recordType = 'sms';
     callBtn.recordType = 'call';
+    
+    //采集短信
+    
+    const smsBtn = await page.$('[eventcode=UCenter_billdetailqry_type_DCXD]');
+    smsBtn.recordType = 'sms';
+
+    const queryTypeList = [];
+
+    queryTypeList.push(callBtn);
+    queryTypeList.push(smsBtn);
     // await smsBtn.click();
     // await textBtn.click();
 
@@ -74,9 +83,7 @@ const cmCrawler = async function () {
 
     initTrace(loginNumber);
     await page.waitFor(1000);
-    const queryTypeList = [];
-    queryTypeList.push(smsBtn);
-    queryTypeList.push(callBtn);
+
     const monthList = await page.$$('#month-data li');
     monthList.reverse();
     for (let query of queryTypeList) {
@@ -85,7 +92,7 @@ const cmCrawler = async function () {
         for (let monthLi of monthList) {
             page.evaluate(el => el.setAttribute('class', ''), monthLi);
         }
-        await page.waitFor(1000);
+        await page.waitFor(config.queryTimeInterval);
         await query.click();
         // page.waitForSelector('#tmpl-data img');
         type = query.recordType;
@@ -93,7 +100,7 @@ const cmCrawler = async function () {
         const date = new Date();
         const [y, m, d, t] = [date.getFullYear(), date.getMonth() + 1, date.getDate(), date.getTime()];
 
-        const filename = `${loginNumber}/${type}_${y}.${m}.${d}_${t}.csv`;
+        const filename = `${loginNumber}/${loginNumber}_${chineseFilePrefix[type]}_${y}.${m}.${d}_${t}.csv`;
         if (fs.existsSync(filename)) {
             fs.unlinkSync(filename);
         }
@@ -115,7 +122,7 @@ const cmCrawler = async function () {
                     return true
                 }
             }), {timeout: 0}); // to do
-            await page.waitFor(3000);
+            await page.waitFor(config.queryTimeInterval);
             let pageDiv;
             // try {
             pageDiv = await page.$('#page-demo');
@@ -155,7 +162,7 @@ const cmCrawler = async function () {
                         return true
                     }
                 }), {timeout: 0}); // to do
-                await page.waitFor(3000);
+                await page.waitFor(config.queryTimeInterval);
 
                 // let text = await res.text();
                 // let results = JSON.parse(text.substring(text.indexOf('(') + 1, text.lastIndexOf(')')));
@@ -193,7 +200,7 @@ function writeData(filename, data, type) {
 
 const init = async () => {
     const browser = await puppeteer.launch({
-        executablePath: executablePath.mac,
+        executablePath: config.executablePath.win32,
         headless: false, ignoreHTTPSErrors: true,
         // slowMo: 100,
         args: [
@@ -219,10 +226,11 @@ const init = async () => {
 };
 
 function initTrace(path) {
-    if (!fs.existsSync(path)) {
-        fs.mkdirSync(path);
-        fs.mkdirSync(path + '/screenshots');
-    }
+    if (!fs.existsSync(path)) fs.mkdirSync(path);
+
+    const ss = path + '/screenshots';
+    if(!fs.existsSync(ss)) fs.mkdirSync(ss);
+
     if (!fs.existsSync(`${path}/trace.txt`)) {
         let fd = fs.openSync(`${path}/trace.txt`, 'w');
         fs.writeFileSync(fd, JSON.stringify(trace) + ';');
