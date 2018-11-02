@@ -4,9 +4,8 @@ const path = require('path');
 const fs = require('fs');
 const log4js = require('log4js');
 const logger = log4js.getLogger();
-logger.level = 'debug';
+
 const {config} = require('./config.js');
-log4js.configure(config.log4js);
 
 const billTypeMap = {
     '02': 'call',
@@ -46,7 +45,6 @@ const cmCrawler = async function () {
 
     // const l = await page.waitForSelector('#dropdownMenu2');
     // logger.info(await page.evaluate(el => el.innerText, l));
-    logger.info('------------------------\n');
     const loginBtn = await page.waitForSelector('#login-btn');
     loginBtn.click();
     let detailRequest, jsonpFunction;
@@ -67,9 +65,15 @@ const cmCrawler = async function () {
     await page.evaluate(() => {
         window.loginStatus = true
     });
+
+    logger.level = 'debug';
+    config.log4js.appenders.everything.filename = `${loginNumber}/${loginNumber}.log`;
+    log4js.configure(config.log4js);
+    logger.info('-----------start logging-------------\n');
+    logger.info(loginNumber);
+
     initTrace(loginNumber);
     await page.waitFor(1000);
-    logger.info(loginNumber);
     const queryTypeList = [];
     queryTypeList.push(smsBtn);
     queryTypeList.push(callBtn);
