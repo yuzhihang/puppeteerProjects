@@ -7,39 +7,18 @@ const logger = log4js.getLogger();
 const {config} = require('./config.js');
 
 const {searchUrl, chineseFilePrefix, lineTitles, lineFields, launChOptions, billTypeMap,} = require('./consts');
-
+//todo 测试断点继续功能
 let page, monthData = [], totalNum, loginNumber, type,
     trace = {version: 1, sms: {date: '0', cursor: 1}, call: {date: '0', cursor: 1}},
     queryData, allData = {};
 
 const cmCrawler = async function () {
     //页面初始化
-    await init();
+    await initPage();
 
     // const l = await page.waitForSelector('#dropdownMenu2');
     // logger.info(await page.evaluate(el => el.innerText, l));
-    //点击登陆按钮
-    const loginBtn = await page.waitForSelector('#login-btn');
-    loginBtn.click();
-
-    //等待登陆输入框出现
-    await page.waitForSelector('table.ui-dialog-grid', {hidden: false, timeout: 0});
-    //等待输入完毕，点击确认按钮后登录框消失
-    await page.waitForSelector('table.ui-dialog-grid', {hidden: true, timeout: 0});
-
-    // await page.waitForSelector('#show_vec_firstdiv');
-    //等待登陆成功，用右上角是否出现电话号码来判断，也可以改成通过登陆接口返回结果来判断
-    const loginNumberEl = (await page.waitForSelector('.loginStr', {timeout: 0}));
-    loginNumber = await page.evaluate(el => el.innerText, loginNumberEl);
-    //在浏览器环境中设置一个全局的登陆状态变量
-    await page.evaluate(() => {
-        window.loginStatus = true
-    });
-
-    configLogger(loginNumber);
-
-    //初始化信息采集进度记录，变量为trace
-    initTrace(loginNumber);
+    loginNumber = await login();
 
     //等待类型菜单栏出现（包括通话记录，短信记录，上网记录等按钮）
     await page.waitForSelector('#switch-data');
@@ -72,7 +51,7 @@ const cmCrawler = async function () {
         //初始化通话或短信记录文件
         const filename = initRecordFile(loginNumber);
 
-        //先将月份按钮设置为未激活状态，以免点击类型按钮后即开始查询
+        //先将月份按钮设置为未激活状态，以免点击类型按钮后立即开始查询
         for (let monthLi of monthList) {
             page.evaluate(el => el.setAttribute('class', ''), monthLi);
         }
@@ -85,12 +64,15 @@ const cmCrawler = async function () {
         for (let monthLi of monthList) {
             monthData = [];
             totalNum = 0;
+            fs.writeFileSync(`${loginNumber}/trace.txt`, JSON.stringify(trace) + ';');
 
             const month = await page.evaluate(el => el.getAttribute('v'), monthLi);
             // logger.info(month,trace[ty[]])
+            //月份小于trace中的记录时，跳过该月的查询
             if (month < trace[type].date) continue;
             trace[type].date = month;
             //todo remove activate
+
             await monthLi.click();
             logger.info('1.0 init month :', type, month, monthData.length, totalNum);
             await page.waitForResponse((response => {
@@ -195,7 +177,7 @@ const requestInterceptor = interceptedRequest => {
 
 };
 
-const responseParser = async response => {
+const responseProcessor = async response => {
     const url = response.url();
 
     if (url.indexOf('detailbillinfojsonp') === -1) return;
@@ -203,8 +185,9 @@ const responseParser = async response => {
     const text = await response.text();
     //response text 格式为 jQuery_1234(data)
     const results = JSON.parse(text.substring(text.indexOf('(') + 1, text.lastIndexOf(')')));
-    //身份标识不存在，验权失败
+
     if (results.retCode === '520001') {
+        //身份标识不存在，验权失败
         logger.info('520001 results', JSON.stringify(results));
         await page.evaluate(() => {
             loginStatus = false
@@ -225,7 +208,6 @@ const responseParser = async response => {
         }
 
         //更新记录文件
-        fs.writeFileSync(`${loginNumber}/trace.txt`, JSON.stringify(trace) + ';');
         //全局登陆状态设置为true
         await page.evaluate(() => {
             loginStatus = true;
@@ -241,7 +223,28 @@ const responseParser = async response => {
     }
 };
 
-const init = async () => {
+function writeData(filename, month, type, data) {
+    //统计数据
+    let counts = fs.openSync(loginNumber + '/统计.csv', 'a+');
+    fs.appendFileSync(counts, `${chineseFilePrefix[type]},${month},${data.length}\r\n`);
+    fs.closeSync(counts);
+
+    //通话或短信详单
+    let fd = fs.openSync(filename, 'a+');
+    fs.appendFileSync(fd, lineTitles[type]);
+
+    for (let d of data) {
+        let fields = lineFields[type];
+        fields = fields.map((item) => {
+            return d[item]
+        });
+        const line = fields.toString() + '\r\n';
+        fs.appendFileSync(fd, line);
+    }
+    fs.closeSync(fd);
+}
+
+const initPage = async () => {
     const browser = await puppeteer.launch({
         executablePath: config.executablePath.mac,
         headless: false,
@@ -260,7 +263,7 @@ const init = async () => {
     await page.setRequestInterception(true);
     page.on('request', requestInterceptor);
 
-    page.on('response', responseParser);
+    page.on('response', responseProcessor);
 
     await page.goto(searchUrl, {waitUntil: 'domcontentloaded'});
 
@@ -268,6 +271,31 @@ const init = async () => {
     await page.evaluate(() => {
         loginStatus = false;
     })
+
+};
+
+const login = async () =>{
+    //点击登陆按钮
+    const loginBtn = await page.waitForSelector('#login-btn');
+    loginBtn.click();
+
+    //等待登陆输入框出现
+    await page.waitForSelector('table.ui-dialog-grid', {hidden: false, timeout: 0});
+    //等待输入完毕，点击确认按钮后登录框消失
+    await page.waitForSelector('table.ui-dialog-grid', {hidden: true, timeout: 0});
+
+    // await page.waitForSelector('#show_vec_firstdiv');
+    //等待登陆成功，用右上角是否出现电话号码来判断，也可以改成通过登陆接口返回结果来判断
+    const loginNumberEl = (await page.waitForSelector('.loginStr', {timeout: 0}));
+    const loginNumber = await page.evaluate(el => el.innerText, loginNumberEl);
+    //在浏览器环境中设置一个全局的登陆状态变量
+    await page.evaluate(() => {
+        window.loginStatus = true
+    });
+    initTrace(loginNumber);
+
+    configLogger(loginNumber);
+    return loginNumberEl;
 
 };
 
@@ -307,28 +335,6 @@ function configLogger(loginNumber) {
     log4js.configure(config.log4js);
     logger.info('-----------start logging-------------\n');
     logger.info(loginNumber);
-}
-
-
-function writeData(filename, month, type, data) {
-    //统计数据
-    let counts = fs.openSync('统计.csv', 'a+');
-    fs.appendFileSync(counts, `${chineseFilePrefix[type]},${month},${data.length}\r\n`);
-    fs.closeSync(counts);
-
-    //通话或短信详单
-    let fd = fs.openSync(filename, 'a+');
-    fs.appendFileSync(fd, lineTitles[type]);
-
-    for (let d of data) {
-        let fields = lineFields[type];
-        fields = fields.map((item) => {
-            return d[item]
-        });
-        const line = fields.toString() + '\r\n';
-        fs.appendFileSync(fd, line);
-    }
-    fs.closeSync(fd);
 }
 
 cmCrawler();
