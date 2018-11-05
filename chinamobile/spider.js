@@ -64,13 +64,13 @@ const cmCrawler = async function () {
         for (let monthLi of monthList) {
             monthData = [];
             totalNum = 0;
-            fs.writeFileSync(`${loginNumber}/trace.txt`, JSON.stringify(trace) + ';');
 
             const month = await page.evaluate(el => el.getAttribute('v'), monthLi);
-            // logger.info(month,trace[ty[]])
             //月份小于trace中的记录时，跳过该月的查询
             if (month < trace[type].date) continue;
             trace[type].date = month;
+
+            fs.writeFileSync(`${loginNumber}/trace.txt`, JSON.stringify(trace) + ';');
             //todo remove activate
 
             await monthLi.click();
@@ -295,7 +295,7 @@ const login = async () =>{
     initTrace(loginNumber);
 
     configLogger(loginNumber);
-    return loginNumberEl;
+    return loginNumber;
 
 };
 
