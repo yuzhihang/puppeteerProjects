@@ -135,7 +135,7 @@ const cmCrawler = async function () {
                 // let results = JSON.parse(text.substring(text.indexOf('(') + 1, text.lastIndexOf(')')));
             }
 
-            logger.info('3.1 ' + month + '月' + type + '数据全部取完\n数据长度：' + monthData.length);
+            logger.info('3.1 ' + month + '月' + type + '数据全部取完\r\n共：' + monthData.length + '条\r\n');
             // queryData = queryData.concat(monthData);
             //一次写一个月的数据
             writeData(filename, month, type, monthData);
@@ -325,6 +325,11 @@ function initRecordFile(loginNumber) {
     if (fs.existsSync(filename)) {
         fs.unlinkSync(filename);
     }
+
+    //添加文件 BOM头
+    let BOM = '\ufeff';
+    let fd = fs.openSync(filename, 'a+');
+    fs.appendFileSync(fd, BOM);
     return filename;
 }
 
